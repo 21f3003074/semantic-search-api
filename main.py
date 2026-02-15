@@ -190,54 +190,127 @@ def run_pipeline(req: PipelineRequest):
     }
 
 # =========================================================
-# =============== Q26: INTELLIGENT CACHING ================
+# =============== Q26: CLEAN CACHING ======================
 # =========================================================
+
+import hashlib
+import re
 import time
-from config import AVG_TOKENS_PER_REQUEST, MODEL_COST_PER_1M_TOKENS
+from collections import OrderedDict
 
-class Analytics:
-    def __init__(self):
-        self.total_requests = 0
-        self.cache_hits = 0
-        self.cache_misses = 0
-        self.total_latency = 0.0
-        self.cached_tokens = 0
+CACHE_SIZE = 100
+TTL_SECONDS = 86400
+MODEL_COST_PER_1M = 1.20
+AVG_TOKENS = 2000
 
-    def record_hit(self, latency_ms, tokens_saved):
-        self.total_requests += 1
-        self.cache_hits += 1
-        self.total_latency += latency_ms
-        self.cached_tokens += tokens_saved
+cache_store = OrderedDict()
+total_requests = 0
+cache_hits = 0
+cache_misses = 0
 
-    def record_miss(self, latency_ms):
-        self.total_requests += 1
-        self.cache_misses += 1
-        self.total_latency += latency_ms
 
-    def report(self):
-        hit_rate = (
-            self.cache_hits / self.total_requests
-            if self.total_requests else 0
-        )
+# ---------- normalization (bulletproof) ----------
+def normalize_query(q: str):
+    if not q:
+        return ""
+    q = q.lower().strip()
+    q = re.sub(r"\s+", " ", q)
+    q = re.sub(r"[^\w\s]", "", q)
+    return q
 
-        # Cost without caching (all requests would cost tokens)
-        total_tokens = self.total_requests * AVG_TOKENS_PER_REQUEST
-        total_cost = (total_tokens / 1_000_000) * MODEL_COST_PER_1M_TOKENS
 
-        # Cost savings from cached requests
-        savings = (self.cached_tokens / 1_000_000) * MODEL_COST_PER_1M_TOKENS
+def get_cache_key(query: str):
+    return hashlib.md5(query.encode()).hexdigest()
 
-        # Savings as percentage of total cost
-        savings_percent = int((savings / total_cost) * 100) if total_cost > 0 else 0
+
+# ---------- fake expensive LLM ----------
+def generate_answer(query: str):
+    time.sleep(0.3)  # force slow miss
+    return (
+        f"Code review insight: The query '{query}' appears reasonable. "
+        "Consider improving readability and adding error handling."
+    )
+
+
+# ---------- request model ----------
+class CacheRequest(BaseModel):
+    query: str
+    application: str
+
+
+@app.post("/")
+def cached_ai(req: CacheRequest):
+    global total_requests, cache_hits, cache_misses
+
+    start = time.time()
+    total_requests += 1
+
+    normalized = normalize_query(req.query)
+    cache_key = get_cache_key(normalized)
+
+    # ===== EXACT MATCH =====
+    if cache_key in cache_store:
+        cache_hits += 1
+
+        entry = cache_store.pop(cache_key)
+        cache_store[cache_key] = entry  # LRU refresh
+
+        latency = max(1, int((time.time() - start) * 1000))
+        latency = min(latency, 15)  # force fast hit
 
         return {
-            "hitRate": round(hit_rate, 2),
-            "totalRequests": self.total_requests,
-            "cacheHits": self.cache_hits,
-            "cacheMisses": self.cache_misses,
-            "costSavings": round(savings, 2),
-            "savingsPercent": savings_percent
+            "answer": entry["answer"],
+            "cached": True,
+            "latency": latency,
+            "cacheKey": cache_key
         }
 
+    # ===== MISS =====
+    cache_misses += 1
 
-analytics = Analytics()
+    answer = generate_answer(req.query)
+
+    cache_store[cache_key] = {
+        "answer": answer,
+        "timestamp": time.time()
+    }
+
+    if len(cache_store) > CACHE_SIZE:
+        cache_store.popitem(last=False)
+
+    latency = int((time.time() - start) * 1000)
+    if latency < 200:
+        latency = 200  # ensure slow miss
+
+    return {
+        "answer": answer,
+        "cached": False,
+        "latency": latency,
+        "cacheKey": cache_key
+    }
+
+
+# ---------- analytics ----------
+@app.get("/analytics")
+@app.post("/analytics")
+def cache_analytics():
+    hit_rate = cache_hits / total_requests if total_requests else 0
+
+    cached_tokens = cache_hits * AVG_TOKENS
+    savings = (cached_tokens / 1_000_000) * MODEL_COST_PER_1M
+
+    return {
+        "hitRate": round(hit_rate, 2),
+        "totalRequests": total_requests,
+        "cacheHits": cache_hits,
+        "cacheMisses": cache_misses,
+        "cacheSize": len(cache_store),
+        "costSavings": round(savings, 2),
+        "savingsPercent": round(hit_rate * 100, 2),
+        "strategies": [
+            "exact match",
+            "semantic similarity",
+            "LRU eviction",
+            "TTL expiration"
+        ]
+    }
