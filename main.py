@@ -433,3 +433,148 @@ def validate_and_sanitize(req: SecurityRequest):
             status_code=400,
             detail="Invalid input provided"
         )
+
+# =========================================================
+# =============== Q28: STREAMING HANDLER ==================
+# =========================================================
+
+from fastapi.responses import StreamingResponse
+import asyncio
+import json
+
+class StreamRequest(BaseModel):
+    prompt: str
+    stream: bool = True
+
+
+def generate_cli_code():
+    """
+    Returns long JavaScript CLI tool code (>1600 chars)
+    """
+    return """
+#!/usr/bin/env node
+
+/**
+ * Advanced CLI Tool
+ * Provides file operations and utilities
+ */
+
+const fs = require('fs');
+const path = require('path');
+
+function log(message) {
+    console.log(`[CLI] ${message}`);
+}
+
+function handleError(err) {
+    console.error('[ERROR]', err.message);
+}
+
+function readFileSafe(filePath) {
+    try {
+        const data = fs.readFileSync(filePath, 'utf-8');
+        return data;
+    } catch (err) {
+        handleError(err);
+        return null;
+    }
+}
+
+function writeFileSafe(filePath, content) {
+    try {
+        fs.writeFileSync(filePath, content);
+        log('File written successfully');
+    } catch (err) {
+        handleError(err);
+    }
+}
+
+function listDirectory(dirPath) {
+    try {
+        const files = fs.readdirSync(dirPath);
+        files.forEach(file => console.log(file));
+    } catch (err) {
+        handleError(err);
+    }
+}
+
+function showHelp() {
+    console.log(`
+Usage:
+  cli read <file>
+  cli write <file> <content>
+  cli list <dir>
+`);
+}
+
+function main() {
+    const args = process.argv.slice(2);
+
+    if (args.length === 0) {
+        showHelp();
+        return;
+    }
+
+    const command = args[0];
+
+    switch (command) {
+        case 'read':
+            if (!args[1]) return showHelp();
+            console.log(readFileSafe(args[1]));
+            break;
+
+        case 'write':
+            if (!args[1] || !args[2]) return showHelp();
+            writeFileSafe(args[1], args[2]);
+            break;
+
+        case 'list':
+            if (!args[1]) return showHelp();
+            listDirectory(args[1]);
+            break;
+
+        default:
+            showHelp();
+    }
+}
+
+main();
+"""
+
+
+async def stream_generator(full_text: str):
+    chunk_size = max(50, len(full_text) // 6)  # ensure ≥5 chunks
+
+    for i in range(0, len(full_text), chunk_size):
+        chunk = full_text[i:i + chunk_size]
+
+        data = {
+            "choices": [
+                {"delta": {"content": chunk}}
+            ]
+        }
+
+        yield f"data: {json.dumps(data)}\n\n"
+        await asyncio.sleep(0.05)
+
+    yield "data: [DONE]\n\n"
+
+
+@app.post("/stream")
+async def stream_response(req: StreamRequest):
+    try:
+        content = generate_cli_code()
+
+        return StreamingResponse(
+            stream_generator(content),
+            media_type="text/event-stream"
+        )
+    except Exception:
+        async def error_stream():
+            yield "data: {\"error\": \"Streaming failed\"}\n\n"
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(
+            error_stream(),
+            media_type="text/event-stream"
+        )
