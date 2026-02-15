@@ -210,8 +210,22 @@ cache_misses = 0
 
 
 # ---------------- NORMALIZE ----------------
+import re
+
 def normalize_query(q: str):
-    return q.strip().lower()
+    if not q:
+        return ""
+
+    q = q.lower()
+    q = q.strip()
+
+    # collapse multiple spaces
+    q = re.sub(r"\s+", " ", q)
+
+    # remove punctuation
+    q = re.sub(r"[^\w\s]", "", q)
+
+    return q
 
 
 # ---------------- HASH ----------------
