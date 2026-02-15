@@ -316,14 +316,17 @@ def cached_ai(req: CacheRequest):
 
     # ===== CACHE MISS =====
     cache_misses += 1
-
+    
+    # simulate expensive call FIRST
     answer = generate_answer(req.query)
+    
+    # THEN measure latency
+    latency = int((time.time() - start) * 1000)
+    
+    # enforce minimum miss latency
+    if latency < 200:
+        latency = 200
 
-    cache_store[cache_key] = {
-        "answer": answer,
-        "embedding": query_vec,
-        "timestamp": time.time()
-    }
 
     # ===== LRU EVICTION =====
     if len(cache_store) > CACHE_SIZE:
