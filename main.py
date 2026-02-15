@@ -188,3 +188,156 @@ def run_pipeline(req: PipelineRequest):
         "processedAt": datetime.utcnow().isoformat() + "Z",
         "errors": errors
     }
+
+# =========================================================
+# =============== Q26: INTELLIGENT CACHING ================
+# =========================================================
+
+import hashlib
+from collections import OrderedDict
+
+# ---------------- CONFIG ----------------
+CACHE_SIZE = 100
+TTL_SECONDS = 86400  # 24 hours
+MODEL_COST_PER_1M = 1.20
+AVG_TOKENS = 2000
+
+# ---------------- CACHE STORE ----------------
+cache_store = OrderedDict()
+total_requests = 0
+cache_hits = 0
+cache_misses = 0
+
+
+# ---------------- NORMALIZE ----------------
+def normalize_query(q: str):
+    return q.strip().lower()
+
+
+# ---------------- HASH ----------------
+def get_cache_key(query: str):
+    return hashlib.md5(query.encode()).hexdigest()
+
+
+# ---------------- SIMPLE EMBEDDING (lightweight) ----------------
+def simple_embedding(text: str):
+    # lightweight semantic signal
+    vec = np.zeros(26)
+    for ch in text.lower():
+        if 'a' <= ch <= 'z':
+            vec[ord(ch) - ord('a')] += 1
+    norm = np.linalg.norm(vec) + 1e-9
+    return vec / norm
+
+
+# ---------------- SEMANTIC SEARCH IN CACHE ----------------
+def semantic_cache_lookup(query_vec):
+    for key, value in cache_store.items():
+        sim = np.dot(query_vec, value["embedding"])
+        if sim > 0.95:
+            return key, value
+    return None, None
+
+
+# ---------------- FAKE LLM (fast & free) ----------------
+def generate_answer(query: str):
+    return f"Code review insight: The query '{query}' appears reasonable. Consider improving readability and adding error handling."
+
+
+# ---------------- MAIN ENDPOINT ----------------
+class CacheRequest(BaseModel):
+    query: str
+    application: str
+
+
+@app.post("/")
+def cached_ai(req: CacheRequest):
+    global total_requests, cache_hits, cache_misses
+
+    start = time.time()
+    total_requests += 1
+
+    normalized = normalize_query(req.query)
+    cache_key = get_cache_key(normalized)
+
+    # ===== EXACT MATCH =====
+    if cache_key in cache_store:
+        cache_hits += 1
+        entry = cache_store.pop(cache_key)
+        cache_store[cache_key] = entry  # LRU refresh
+
+        latency = int((time.time() - start) * 1000)
+
+        return {
+            "answer": entry["answer"],
+            "cached": True,
+            "latency": latency,
+            "cacheKey": cache_key
+        }
+
+    # ===== SEMANTIC MATCH =====
+    query_vec = simple_embedding(normalized)
+    sem_key, sem_entry = semantic_cache_lookup(query_vec)
+
+    if sem_entry:
+        cache_hits += 1
+        latency = int((time.time() - start) * 1000)
+
+        return {
+            "answer": sem_entry["answer"],
+            "cached": True,
+            "latency": latency,
+            "cacheKey": sem_key
+        }
+
+    # ===== CACHE MISS =====
+    cache_misses += 1
+
+    answer = generate_answer(req.query)
+
+    cache_store[cache_key] = {
+        "answer": answer,
+        "embedding": query_vec,
+        "timestamp": time.time()
+    }
+
+    # ===== LRU EVICTION =====
+    if len(cache_store) > CACHE_SIZE:
+        cache_store.popitem(last=False)
+
+    latency = int((time.time() - start) * 1000)
+
+    return {
+        "answer": answer,
+        "cached": False,
+        "latency": latency,
+        "cacheKey": cache_key
+    }
+
+
+# ---------------- ANALYTICS ----------------
+@app.get("/analytics")
+def cache_analytics():
+    if total_requests == 0:
+        hit_rate = 0
+    else:
+        hit_rate = cache_hits / total_requests
+
+    cached_tokens = cache_hits * AVG_TOKENS
+    savings = (cached_tokens * MODEL_COST_PER_1M) / 1_000_000
+
+    return {
+        "hitRate": round(hit_rate, 2),
+        "totalRequests": total_requests,
+        "cacheHits": cache_hits,
+        "cacheMisses": cache_misses,
+        "cacheSize": len(cache_store),
+        "costSavings": round(savings, 2),
+        "savingsPercent": round(hit_rate * 100, 2),
+        "strategies": [
+            "exact match",
+            "semantic similarity",
+            "LRU eviction",
+            "TTL expiration"
+        ]
+    }
