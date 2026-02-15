@@ -192,184 +192,52 @@ def run_pipeline(req: PipelineRequest):
 # =========================================================
 # =============== Q26: INTELLIGENT CACHING ================
 # =========================================================
+import time
+from config import AVG_TOKENS_PER_REQUEST, MODEL_COST_PER_1M_TOKENS
 
-import hashlib
-from collections import OrderedDict
+class Analytics:
+    def __init__(self):
+        self.total_requests = 0
+        self.cache_hits = 0
+        self.cache_misses = 0
+        self.total_latency = 0.0
+        self.cached_tokens = 0
 
-# ---------------- CONFIG ----------------
-CACHE_SIZE = 100
-TTL_SECONDS = 86400  # 24 hours
-MODEL_COST_PER_1M = 1.20
-AVG_TOKENS = 2000
+    def record_hit(self, latency_ms, tokens_saved):
+        self.total_requests += 1
+        self.cache_hits += 1
+        self.total_latency += latency_ms
+        self.cached_tokens += tokens_saved
 
-# ---------------- CACHE STORE ----------------
-cache_store = OrderedDict()
-total_requests = 0
-cache_hits = 0
-cache_misses = 0
+    def record_miss(self, latency_ms):
+        self.total_requests += 1
+        self.cache_misses += 1
+        self.total_latency += latency_ms
 
+    def report(self):
+        hit_rate = (
+            self.cache_hits / self.total_requests
+            if self.total_requests else 0
+        )
 
-# ---------------- NORMALIZE ----------------
-import re
+        # Cost without caching (all requests would cost tokens)
+        total_tokens = self.total_requests * AVG_TOKENS_PER_REQUEST
+        total_cost = (total_tokens / 1_000_000) * MODEL_COST_PER_1M_TOKENS
 
-def normalize_query(q: str):
-    if not q:
-        return ""
+        # Cost savings from cached requests
+        savings = (self.cached_tokens / 1_000_000) * MODEL_COST_PER_1M_TOKENS
 
-    q = q.lower()
-    q = q.strip()
-
-    # collapse multiple spaces
-    q = re.sub(r"\s+", " ", q)
-
-    # remove punctuation
-    q = re.sub(r"[^\w\s]", "", q)
-
-    return q
-
-
-# ---------------- HASH ----------------
-def get_cache_key(query: str):
-    return hashlib.md5(query.encode()).hexdigest()
-
-
-# ---------------- SIMPLE EMBEDDING (lightweight) ----------------
-def simple_embedding(text: str):
-    # lightweight semantic signal
-    vec = np.zeros(26)
-    for ch in text.lower():
-        if 'a' <= ch <= 'z':
-            vec[ord(ch) - ord('a')] += 1
-    norm = np.linalg.norm(vec) + 1e-9
-    return vec / norm
-
-
-# ---------------- SEMANTIC SEARCH IN CACHE ----------------
-def semantic_cache_lookup(query_vec):
-    for key, value in cache_store.items():
-        sim = np.dot(query_vec, value["embedding"])
-        if sim > 0.95:
-            return key, value
-    return None, None
-
-
-# ---------------- FAKE LLM (fast & free) ----------------
-def generate_answer(query: str):
-    # simulate expensive LLM call
-    time.sleep(0.3)  # 150ms delay
-
-    return (
-        f"Code review insight: The query '{query}' appears reasonable. "
-        "Consider improving readability and adding error handling."
-    )
-
-
-# ---------------- MAIN ENDPOINT ----------------
-class CacheRequest(BaseModel):
-    query: str
-    application: str
-
-
-@app.post("/")
-def cached_ai(req: CacheRequest):
-    global total_requests, cache_hits, cache_misses
-
-    start = time.time()
-    total_requests += 1
-
-    normalized = normalize_query(req.query)
-    cache_key = get_cache_key(normalized)
-
-    # ===== EXACT MATCH =====
-    if cache_key in cache_store:
-        cache_hits += 1
-        entry = cache_store.pop(cache_key)
-        cache_store[cache_key] = entry  # LRU refresh
-    
-        latency = max(1, int((time.time() - start) * 1000))
-    
-        # force fast hit perception
-        if latency > 15:
-            latency = 15
-    
-        return {
-            "answer": entry["answer"],
-            "cached": True,
-            "latency": latency,
-            "cacheKey": cache_key
-        }
-
-    # ===== SEMANTIC MATCH =====
-    query_vec = simple_embedding(normalized)
-    sem_key, sem_entry = semantic_cache_lookup(query_vec)
-
-    if sem_entry:
-        cache_hits += 1
-        latency = max(1, int((time.time() - start) * 1000))
+        # Savings as percentage of total cost
+        savings_percent = int((savings / total_cost) * 100) if total_cost > 0 else 0
 
         return {
-            "answer": sem_entry["answer"],
-            "cached": True,
-            "latency": latency,
-            "cacheKey": sem_key
+            "hitRate": round(hit_rate, 2),
+            "totalRequests": self.total_requests,
+            "cacheHits": self.cache_hits,
+            "cacheMisses": self.cache_misses,
+            "costSavings": round(savings, 2),
+            "savingsPercent": savings_percent
         }
 
-    # ===== CACHE MISS =====
-    cache_misses += 1
-    
-    # simulate expensive call FIRST
-    answer = generate_answer(req.query)
-    
-    # THEN measure latency
-    latency = int((time.time() - start) * 1000)
-    
-    # enforce minimum miss latency
-    if latency < 200:
-        latency = 200
 
-
-    # ===== LRU EVICTION =====
-    if len(cache_store) > CACHE_SIZE:
-        cache_store.popitem(last=False)
-
-    latency = int((time.time() - start) * 1000)
-    # ensure miss always noticeably slower
-    if latency < 200:
-        latency = 200
-
-
-    return {
-        "answer": answer,
-        "cached": False,
-        "latency": latency,
-        "cacheKey": cache_key
-    }
-
-
-# ---------------- ANALYTICS ----------------
-@app.get("/analytics")
-@app.post("/analytics")
-def cache_analytics():
-    if total_requests == 0:
-        hit_rate = 0
-    else:
-        hit_rate = cache_hits / total_requests
-
-    cached_tokens = cache_hits * AVG_TOKENS
-    savings = (cached_tokens * MODEL_COST_PER_1M) / 1_000_000
-
-    return {
-        "hitRate": round(hit_rate, 2),
-        "totalRequests": total_requests,
-        "cacheHits": cache_hits,
-        "cacheMisses": cache_misses,
-        "cacheSize": len(cache_store),
-        "costSavings": round(savings, 2),
-        "savingsPercent": round(hit_rate * 100, 2),
-        "strategies": [
-            "exact match",
-            "semantic similarity",
-            "LRU eviction",
-            "TTL expiration"
-        ]
-    }
+analytics = Analytics()
