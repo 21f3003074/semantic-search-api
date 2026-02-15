@@ -317,6 +317,7 @@ def cached_ai(req: CacheRequest):
 
 # ---------------- ANALYTICS ----------------
 @app.get("/analytics")
+@app.post("/analytics")
 def cache_analytics():
     if total_requests == 0:
         hit_rate = 0
