@@ -585,24 +585,14 @@ async def stream_response(req: StreamRequest):
 
 from typing import List
 from fastapi.middleware.cors import CORSMiddleware
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
 # (CORS already likely enabled — safe if duplicated)
 
 class SimilarityRequest(BaseModel):
     docs: List[str]
     query: str
-
-
-def simple_embed(text: str):
-    """
-    Lightweight embedding (free-tier friendly)
-    """
-    vec = np.zeros(26)
-    for ch in text.lower():
-        if 'a' <= ch <= 'z':
-            vec[ord(ch) - ord('a')] += 1
-    norm = np.linalg.norm(vec) + 1e-9
-    return vec / norm
 
 
 @app.post("/similarity")
@@ -614,20 +604,26 @@ def similarity_search(req: SimilarityRequest):
         if not docs or not query:
             raise HTTPException(status_code=400, detail="Invalid input")
 
-        # embed query
-        query_vec = simple_embed(query)
+        # Build corpus (docs + query)
+        corpus = docs + [query]
 
-        scored = []
+        vectorizer = TfidfVectorizer()
+        vectors = vectorizer.fit_transform(corpus)
 
-        for doc in docs:
-            doc_vec = simple_embed(doc)
-            score = float(np.dot(query_vec, doc_vec))
-            scored.append((score, doc))
+        # Last vector is query
+        query_vec = vectors[-1]
+        doc_vecs = vectors[:-1]
+
+        # cosine similarity
+        sims = cosine_similarity(query_vec, doc_vecs)[0]
+
+        # pair docs with scores
+        scored = list(zip(sims, docs))
 
         # sort descending
         scored.sort(key=lambda x: x[0], reverse=True)
 
-        # top 3 docs
+        # top 3 matches
         top_docs = [doc for _, doc in scored[:3]]
 
         return {"matches": top_docs}
