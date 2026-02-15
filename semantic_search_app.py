@@ -38,9 +38,13 @@ def vector_search(query: str, k: int = 5):
 
     results = []
     for idx in top_idx:
+        # deterministic tiny boost to break ties
+        rank_boost = (len(doc_ids) - idx) / len(doc_ids) * 0.01
+        final_score = float(max(0.001, min(1.0, sims[idx] + rank_boost)))
+    
         results.append({
             "id": int(doc_ids[idx]),
-            "score": float(max(0.001, sims[idx])),  # avoid zero
+            "score": final_score,
             "content": doc_texts[idx],
             "metadata": {"source": "vector_search"}
         })
@@ -103,4 +107,5 @@ def semantic_search(req: SearchRequest):
             "totalDocs": len(documents)
         }
     }
+
 
