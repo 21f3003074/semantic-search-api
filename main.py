@@ -345,3 +345,91 @@ def cache_analytics():
             "TTL expiration"
         ]
     }
+
+# =========================================================
+# =============== Q27: SECURITY VALIDATION =================
+# =========================================================
+
+import html
+import re
+from fastapi import HTTPException
+
+# ---------- request model ----------
+class SecurityRequest(BaseModel):
+    userId: str
+    input: str
+    category: str
+
+
+# ---------- patterns ----------
+SQL_PATTERNS = [
+    r"(?i)\bSELECT\b",
+    r"(?i)\bDROP\b",
+    r"(?i)\bINSERT\b",
+    r"(?i)\bDELETE\b",
+    r"(?i)\bUPDATE\b",
+    r"--",
+    r";"
+]
+
+EMAIL_PATTERN = r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+"
+CREDIT_CARD_PATTERN = r"\b\d{4}-\d{4}-\d{4}-\d{4}\b"
+PASSWORD_PATTERN = r"(?i)password\s*[:=]\s*\S+"
+
+
+# ---------- sanitizer ----------
+def sanitize_text(text: str):
+    # escape HTML (prevents XSS)
+    text = html.escape(text)
+
+    # redact email
+    text = re.sub(EMAIL_PATTERN, "[REDACTED_EMAIL]", text)
+
+    # redact credit card
+    text = re.sub(CREDIT_CARD_PATTERN, "[REDACTED_CARD]", text)
+
+    # redact password
+    text = re.sub(PASSWORD_PATTERN, "password: [REDACTED]", text)
+
+    return text
+
+
+# ---------- SQL detection ----------
+def detect_sql_injection(text: str):
+    for pattern in SQL_PATTERNS:
+        if re.search(pattern, text):
+            return True
+    return False
+
+
+# ---------- endpoint ----------
+@app.post("/secure")
+def validate_and_sanitize(req: SecurityRequest):
+    try:
+        user_input = req.input or ""
+
+        # ===== SQL injection check =====
+        if detect_sql_injection(user_input):
+            return {
+                "blocked": True,
+                "reason": "SQL injection pattern detected",
+                "sanitizedOutput": "",
+                "confidence": 0.98
+            }
+
+        # ===== sanitize content =====
+        cleaned = sanitize_text(user_input)
+
+        return {
+            "blocked": False,
+            "reason": "Input passed all security checks",
+            "sanitizedOutput": cleaned,
+            "confidence": 0.95
+        }
+
+    except Exception:
+        # safe error (no leakage)
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid input provided"
+        )
