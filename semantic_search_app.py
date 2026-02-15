@@ -2,19 +2,10 @@ import time
 import numpy as np
 from fastapi import FastAPI
 from pydantic import BaseModel
-
-from sentence_transformers import SentenceTransformer, CrossEncoder
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
 app = FastAPI()
-
-# -----------------------------
-# Load FREE local models
-# -----------------------------
-print("Loading embedding model...")
-embed_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-
-print("Loading reranker model...")
-reranker_model = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
 
 # -----------------------------
 # Dummy documents (113)
@@ -24,29 +15,29 @@ documents = [
     for i in range(113)
 ]
 
-# -----------------------------
-# Build embeddings once
-# -----------------------------
 doc_texts = [d["content"] for d in documents]
 doc_ids = [d["id"] for d in documents]
 
-print("Creating document embeddings...")
-doc_embeddings = embed_model.encode(doc_texts, normalize_embeddings=True)
+# -----------------------------
+# TF-IDF Vectorizer (LIGHT)
+# -----------------------------
+vectorizer = TfidfVectorizer()
+doc_vectors = vectorizer.fit_transform(doc_texts)
 
 # -----------------------------
 # Vector search
 # -----------------------------
 def vector_search(query: str, k: int = 5):
-    query_emb = embed_model.encode([query], normalize_embeddings=True)[0]
+    query_vec = vectorizer.transform([query])
+    sims = cosine_similarity(query_vec, doc_vectors)[0]
 
-    scores = np.dot(doc_embeddings, query_emb)
-    top_idx = np.argsort(scores)[::-1][:k]
+    top_idx = np.argsort(sims)[::-1][:k]
 
     results = []
     for idx in top_idx:
         results.append({
             "id": int(doc_ids[idx]),
-            "score": float(scores[idx]),
+            "score": float(sims[idx]),
             "content": doc_texts[idx],
             "metadata": {"source": "vector_search"}
         })
@@ -54,19 +45,18 @@ def vector_search(query: str, k: int = 5):
     return results
 
 # -----------------------------
-# Re-ranking (FREE local)
+# Light reranking
 # -----------------------------
 def rerank_results(query: str, candidates: list, top_k: int = 3):
-    if not candidates:
-        return []
+    # simple boost based on keyword overlap
+    query_words = set(query.lower().split())
 
-    pairs = [[query, doc["content"]] for doc in candidates]
-    scores = reranker_model.predict(pairs)
+    for doc in candidates:
+        doc_words = set(doc["content"].lower().split())
+        overlap = len(query_words & doc_words)
+        boost = overlap / (len(query_words) + 1e-6)
 
-    for doc, score in zip(candidates, scores):
-        # normalize to 0–1
-        norm_score = float(1 / (1 + np.exp(-score)))
-        doc["score"] = norm_score
+        doc["score"] = float(min(1.0, doc["score"] + 0.2 * boost))
 
     candidates.sort(key=lambda x: x["score"], reverse=True)
     return candidates[:top_k]
