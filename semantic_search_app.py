@@ -4,8 +4,17 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # -----------------------------
 # Dummy documents (113)
@@ -109,6 +118,7 @@ def semantic_search(req: SearchRequest):
             "totalDocs": len(documents)
         }
     }
+
 
 
 
