@@ -241,7 +241,13 @@ def semantic_cache_lookup(query_vec):
 
 # ---------------- FAKE LLM (fast & free) ----------------
 def generate_answer(query: str):
-    return f"Code review insight: The query '{query}' appears reasonable. Consider improving readability and adding error handling."
+    # simulate expensive LLM call
+    time.sleep(0.15)  # 150ms delay
+
+    return (
+        f"Code review insight: The query '{query}' appears reasonable. "
+        "Consider improving readability and adding error handling."
+    )
 
 
 # ---------------- MAIN ENDPOINT ----------------
