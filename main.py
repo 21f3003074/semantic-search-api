@@ -266,7 +266,7 @@ def cached_ai(req: CacheRequest):
         entry = cache_store.pop(cache_key)
         cache_store[cache_key] = entry  # LRU refresh
 
-        latency = int((time.time() - start) * 1000)
+        latency = max(1, int((time.time() - start) * 1000))
 
         return {
             "answer": entry["answer"],
@@ -281,7 +281,7 @@ def cached_ai(req: CacheRequest):
 
     if sem_entry:
         cache_hits += 1
-        latency = int((time.time() - start) * 1000)
+        latency = max(1, int((time.time() - start) * 1000))
 
         return {
             "answer": sem_entry["answer"],
@@ -305,7 +305,7 @@ def cached_ai(req: CacheRequest):
     if len(cache_store) > CACHE_SIZE:
         cache_store.popitem(last=False)
 
-    latency = int((time.time() - start) * 1000)
+    latency = max(1, int((time.time() - start) * 1000))
 
     return {
         "answer": answer,
