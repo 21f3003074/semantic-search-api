@@ -1,129 +1,95 @@
 import time
-import os
 import numpy as np
 from fastapi import FastAPI
 from pydantic import BaseModel
-from openai import OpenAI
+
+from sentence_transformers import SentenceTransformer, CrossEncoder
 
 app = FastAPI()
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# Dummy docs (replace later if needed)
+# -----------------------------
+# Load FREE local models
+# -----------------------------
+print("Loading embedding model...")
+embed_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+
+print("Loading reranker model...")
+reranker_model = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+
+# -----------------------------
+# Dummy documents (113)
+# -----------------------------
 documents = [
     {"id": i, "content": f"API documentation about authentication method {i}"}
     for i in range(113)
 ]
 
-# -----------------
-# Embedding
-# -----------------
-def get_embedding(text: str):
-    response = client.embeddings.create(
-        model="text-embedding-3-small",
-        input=text
-    )
-    return np.array(response.data[0].embedding)
+# -----------------------------
+# Build embeddings once
+# -----------------------------
+doc_texts = [d["content"] for d in documents]
+doc_ids = [d["id"] for d in documents]
 
-# -----------------
-# Build vector store
-# -----------------
-doc_embeddings = []
-doc_texts = []
-doc_ids = []
+print("Creating document embeddings...")
+doc_embeddings = embed_model.encode(doc_texts, normalize_embeddings=True)
 
-print("Creating embeddings...")
-
-for doc in documents:
-    emb = get_embedding(doc["content"])
-    doc_embeddings.append(emb)
-    doc_texts.append(doc["content"])
-    doc_ids.append(doc["id"])
-
-doc_embeddings = np.vstack(doc_embeddings)
-
-# -----------------
-# Cosine similarity
-# -----------------
-def cosine_similarity(a, b):
-    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
-
-# -----------------
+# -----------------------------
 # Vector search
-# -----------------
+# -----------------------------
 def vector_search(query: str, k: int = 5):
-    query_emb = get_embedding(query)
+    query_emb = embed_model.encode([query], normalize_embeddings=True)[0]
 
-    scores = []
-    for i, doc_emb in enumerate(doc_embeddings):
-        sim = cosine_similarity(query_emb, doc_emb)
-        scores.append((i, sim))
-
-    scores.sort(key=lambda x: x[1], reverse=True)
-    top = scores[:k]
+    scores = np.dot(doc_embeddings, query_emb)
+    top_idx = np.argsort(scores)[::-1][:k]
 
     results = []
-    for idx, score in top:
+    for idx in top_idx:
         results.append({
-            "id": doc_ids[idx],
-            "score": float(score),
+            "id": int(doc_ids[idx]),
+            "score": float(scores[idx]),
             "content": doc_texts[idx],
             "metadata": {"source": "vector_search"}
         })
 
     return results
 
-# -----------------
-# Reranking
-# -----------------
+# -----------------------------
+# Re-ranking (FREE local)
+# -----------------------------
 def rerank_results(query: str, candidates: list, top_k: int = 3):
-    reranked = []
+    if not candidates:
+        return []
 
-    for doc in candidates:
-        prompt = f"""
-Query: "{query}"
-Document: "{doc['content']}"
+    pairs = [[query, doc["content"]] for doc in candidates]
+    scores = reranker_model.predict(pairs)
 
-Rate relevance from 0-10.
-Only return the number.
-"""
+    for doc, score in zip(candidates, scores):
+        # normalize to 0–1
+        norm_score = float(1 / (1 + np.exp(-score)))
+        doc["score"] = norm_score
 
-        response = client.responses.create(
-            model="gpt-4.1-mini",
-            input=prompt
-        )
+    candidates.sort(key=lambda x: x["score"], reverse=True)
+    return candidates[:top_k]
 
-        score_text = response.output_text.strip()
-
-        try:
-            score = float(score_text) / 10.0
-        except:
-            score = 0.0
-
-        doc["score"] = score
-        reranked.append(doc)
-
-    reranked.sort(key=lambda x: x["score"], reverse=True)
-    return reranked[:top_k]
-
-# -----------------
+# -----------------------------
 # Request model
-# -----------------
+# -----------------------------
 class SearchRequest(BaseModel):
     query: str
     k: int = 5
     rerank: bool = True
     rerankK: int = 3
 
-# -----------------
+# -----------------------------
 # API endpoint
-# -----------------
+# -----------------------------
 @app.post("/search")
 def semantic_search(req: SearchRequest):
     start_time = time.time()
 
     candidates = vector_search(req.query, req.k)
 
-    if req.rerank and candidates:
+    if req.rerank:
         final_results = rerank_results(req.query, candidates, req.rerankK)
         reranked_flag = True
     else:
