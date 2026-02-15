@@ -31,32 +31,39 @@ def vector_search(query: str, k: int = 5):
     query_vec = vectorizer.transform([query])
     sims = cosine_similarity(query_vec, doc_vectors)[0]
 
+    # normalize to 0–1 safely
+    sims = (sims - sims.min()) / (sims.max() - sims.min() + 1e-9)
+
     top_idx = np.argsort(sims)[::-1][:k]
 
     results = []
     for idx in top_idx:
         results.append({
             "id": int(doc_ids[idx]),
-            "score": float(sims[idx]),
+            "score": float(max(0.001, sims[idx])),  # avoid zero
             "content": doc_texts[idx],
             "metadata": {"source": "vector_search"}
         })
 
     return results
-
 # -----------------------------
 # Light reranking
 # -----------------------------
 def rerank_results(query: str, candidates: list, top_k: int = 3):
-    # simple boost based on keyword overlap
+    if not candidates:
+        return []
+
     query_words = set(query.lower().split())
 
     for doc in candidates:
         doc_words = set(doc["content"].lower().split())
         overlap = len(query_words & doc_words)
+
         boost = overlap / (len(query_words) + 1e-6)
 
-        doc["score"] = float(min(1.0, doc["score"] + 0.2 * boost))
+        # combine safely and normalize
+        new_score = doc["score"] * 0.7 + boost * 0.3
+        doc["score"] = float(min(1.0, max(0.001, new_score)))
 
     candidates.sort(key=lambda x: x["score"], reverse=True)
     return candidates[:top_k]
@@ -96,3 +103,4 @@ def semantic_search(req: SearchRequest):
             "totalDocs": len(documents)
         }
     }
+
