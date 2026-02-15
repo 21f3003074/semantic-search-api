@@ -53,24 +53,26 @@ def vector_search(query: str, k: int = 5):
 # -----------------------------
 # Light reranking
 # -----------------------------
-def rerank_results(query: str, candidates: list, top_k: int = 3):
-    if not candidates:
-        return []
-
+def rerank_results(query, results, top_k):
     query_words = set(query.lower().split())
 
-    for doc in candidates:
-        doc_words = set(doc["content"].lower().split())
-        overlap = len(query_words & doc_words)
+    for r in results:
+        content_words = set(r["content"].lower().split())
+        overlap = len(query_words & content_words)
 
-        boost = overlap / (len(query_words) + 1e-6)
+        # keyword score
+        keyword_score = overlap / (len(query_words) + 1)
 
-        # combine safely and normalize
-        new_score = doc["score"] * 0.7 + boost * 0.3
-        doc["score"] = float(min(1.0, max(0.001, new_score)))
+        # combine with existing similarity score
+        base_score = float(r.get("score", 0.0))
 
-    candidates.sort(key=lambda x: x["score"], reverse=True)
-    return candidates[:top_k]
+        combined = 0.7 * base_score + 0.3 * keyword_score
+        combined = float(max(0.0, min(1.0, combined)))
+
+        r["score"] = combined
+
+    results.sort(key=lambda x: x["score"], reverse=True)
+    return results[:top_k]
 
 # -----------------------------
 # Request model
@@ -107,5 +109,6 @@ def semantic_search(req: SearchRequest):
             "totalDocs": len(documents)
         }
     }
+
 
 
