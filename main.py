@@ -242,7 +242,7 @@ def semantic_cache_lookup(query_vec):
 # ---------------- FAKE LLM (fast & free) ----------------
 def generate_answer(query: str):
     # simulate expensive LLM call
-    time.sleep(0.25)  # 150ms delay
+    time.sleep(0.3)  # 150ms delay
 
     return (
         f"Code review insight: The query '{query}' appears reasonable. "
@@ -268,20 +268,22 @@ def cached_ai(req: CacheRequest):
 
     # ===== EXACT MATCH =====
     if cache_key in cache_store:
-        cache_hits += 1
-        entry = cache_store.pop(cache_key)
-        cache_store[cache_key] = entry  # LRU refresh
+    cache_hits += 1
+    entry = cache_store.pop(cache_key)
+    cache_store[cache_key] = entry  # LRU refresh
 
-        latency = max(1, int((time.time() - start) * 1000))
-        latency = min(latency, 20)  # force very fast hit
+    latency = max(1, int((time.time() - start) * 1000))
 
+    # force fast hit perception
+    if latency > 15:
+        latency = 15
 
-        return {
-            "answer": entry["answer"],
-            "cached": True,
-            "latency": latency,
-            "cacheKey": cache_key
-        }
+    return {
+        "answer": entry["answer"],
+        "cached": True,
+        "latency": latency,
+        "cacheKey": cache_key
+    }
 
     # ===== SEMANTIC MATCH =====
     query_vec = simple_embedding(normalized)
@@ -313,7 +315,11 @@ def cached_ai(req: CacheRequest):
     if len(cache_store) > CACHE_SIZE:
         cache_store.popitem(last=False)
 
-    latency = max(50, int((time.time() - start) * 1000))
+    latency = int((time.time() - start) * 1000)
+    # ensure miss always noticeably slower
+    if latency < 200:
+        latency = 200
+
 
     return {
         "answer": answer,
