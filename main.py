@@ -268,22 +268,22 @@ def cached_ai(req: CacheRequest):
 
     # ===== EXACT MATCH =====
     if cache_key in cache_store:
-    cache_hits += 1
-    entry = cache_store.pop(cache_key)
-    cache_store[cache_key] = entry  # LRU refresh
-
-    latency = max(1, int((time.time() - start) * 1000))
-
-    # force fast hit perception
-    if latency > 15:
-        latency = 15
-
-    return {
-        "answer": entry["answer"],
-        "cached": True,
-        "latency": latency,
-        "cacheKey": cache_key
-    }
+        cache_hits += 1
+        entry = cache_store.pop(cache_key)
+        cache_store[cache_key] = entry  # LRU refresh
+    
+        latency = max(1, int((time.time() - start) * 1000))
+    
+        # force fast hit perception
+        if latency > 15:
+            latency = 15
+    
+        return {
+            "answer": entry["answer"],
+            "cached": True,
+            "latency": latency,
+            "cacheKey": cache_key
+        }
 
     # ===== SEMANTIC MATCH =====
     query_vec = simple_embedding(normalized)
